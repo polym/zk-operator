@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: zookeeper-cluster
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zk
+  namespace: zookeeper-cluster
+spec:
+  ports:
+  - port: 2181
+    name: port1
+  selector:
+    app: zk
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zk-cfg
+  namespace: zookeeper-cluster
+data:
+  zoo.cfg: |
+    dataDir=/data
+    dataLogDir=/datalog
+    tickTime=2000
+    initLimit=5
+    syncLimit=2
+    autopurge.snapRetainCount=3
+    autopurge.purgeInterval=0
+    maxClientCnxns=60
+    standaloneEnabled=false
+    reconfigEnabled=true
+    skipACL=yes
+    admin.enableServer=true  
+  mkconfig.sh: |
+    #!/bin/sh
+    podname=${POD_NAME}
+    namespace=${NAMESPACE}
+    myid=$((${POD_NAME##*-}+1))
+    echo $myid > /data/myid
+    cp /tmp/zoo.cfg.tpl /conf/zoo.cfg
+    for id in `seq 1 3`
+    do
+      echo -e "server."$id"=zk-"$(($id-1))".zk.zookeeper-cluster:2888:3888;2181\n" >> /conf/zoo.cfg
+    done
+    if [ $myid -gt 3 ];then
+      echo -e "server."$myid"="$podname".zk.zookeeper-cluster:2888:3888;2181\n" >> /conf/zoo.cfg
+    fi
+    echo "======"
+    cat /conf/zoo.cfg
+    echo "======"
+
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zk
+  namespace: zookeeper-cluster
+spec:
+  serviceName: "zk"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: zk
+  template:
+    metadata:
+      labels:
+        app: zk
+    spec:
+      containers:
+      - name: zk
+        image: zookeeper:3.5.8
+        ports:
+        - containerPort: 2181
+          name: port1
+        volumeMounts:
+        - name: config-volume
+          subPath: zoo.cfg
+          mountPath: /conf/zoo.cfg
+        - name: data-volume
+          subPath: myid
+          mountPath: /data/myid
+      initContainers:
+      - args:
+        - /mkconfig.sh
+        command:
+        - sh
+        image: busybox
+        imagePullPolicy: Always
+        name: cfg-maker
+        volumeMounts:
+        - name: zk-cfg
+          subPath: zoo.cfg
+          mountPath: /tmp/zoo.cfg.tpl
+        - name: zk-cfg
+          subPath: mkconfig.sh
+          mountPath: /mkconfig.sh
+        - name: config-volume
+          mountPath: /conf
+        - name: data-volume
+          mountPath: /data
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: zk-cfg
+        name: zk-cfg
+      - name: config-volume
+        emptyDir: {}
+      - name: data-volume
+        emptyDir: {}

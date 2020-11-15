@@ -1,0 +1,7 @@
+apiVersion: kv.polym.xyz/v1
+kind: ZooKeeperCluster
+metadata:
+  name: zookeepercluster-sample
+spec:
+  # Add fields here
+  replicas: 4

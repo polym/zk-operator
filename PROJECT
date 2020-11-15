@@ -1,0 +1,11 @@
+domain: polym.xyz
+layout: go.kubebuilder.io/v2
+projectName: zk-operator
+repo: github.com/polym/zk-operator
+resources:
+- group: kv
+  kind: ZooKeeperCluster
+  version: v1
+version: 3-alpha
+plugins:
+  go.sdk.operatorframework.io/v2-alpha: {}
