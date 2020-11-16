@@ -50,7 +50,7 @@ type ZooKeeperClusterReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;
 
 func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
@@ -211,6 +211,6 @@ func getPodNames(pods []corev1.Pod) []string {
 	for idx, pod := range pods {
 		podNames[idx] = fmt.Sprintf("%s/%s", pod.Name, pod.Status.PodIP)
 	}
-	sort.Sort(podNames)
+	sort.Strings(podNames)
 	return podNames
 }

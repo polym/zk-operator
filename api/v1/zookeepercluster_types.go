@@ -42,6 +42,7 @@ type ZooKeeperClusterStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName="zkc"
 
 // ZooKeeperCluster is the Schema for the zookeeperclusters API
 type ZooKeeperCluster struct {
