@@ -3,7 +3,7 @@
 
 ## Overview
 
-ZooKeeperCluster Operator is developed by [operator-sdk](https://github.com/operator-framework/operator-sdk) toolkits. Now it support to scale up/down zookeeper replicas.
+ZooKeeperCluster Operator is developed by [operator-sdk](https://github.com/operator-framework/operator-sdk) toolkits. Now it supports to scale up/down zookeeper cluster nodes.
 
 ## Build
 
