@@ -4,4 +4,4 @@ metadata:
   name: zookeepercluster-sample
 spec:
   # Add fields here
-  replicas: 4
+  replicas: 5

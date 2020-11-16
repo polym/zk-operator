@@ -29,17 +29,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kvv1 "github.com/polym/zk-operator/api/v1"
-)
-
-const (
-	ZooConfigMap = "zk-cfg"
 )
 
 // ZooKeeperClusterReconciler reconciles a ZooKeeperCluster object
@@ -53,6 +48,7 @@ type ZooKeeperClusterReconciler struct {
 // +kubebuilder:rbac:groups=kv.polym.xyz,resources=zookeeperclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;
 
 func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
@@ -70,9 +66,47 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 		return ctrl.Result{}, err
 	}
 
+	// name for statefulset, configmap, service
+	namespacedName := types.NamespacedName{Name: zkCluster.Name, Namespace: zkCluster.Namespace}
+
+	// Check service whether exists, create if not found
+	svc := new(corev1.Service)
+	err = r.Get(ctx, namespacedName, svc)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			svcSpec := r.buildService(zkCluster)
+			l.Info("Creating a new Service")
+			err = r.Create(ctx, svcSpec)
+			if err != nil {
+				l.Error(err, "Failed to create Service")
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{Requeue: true}, nil
+		}
+		l.Error(err, "Failed to get Service")
+		return ctrl.Result{}, err
+	}
+
+	// Check configmap whether exists, create if not found
+	configmap := new(corev1.ConfigMap)
+	err = r.Get(ctx, namespacedName, configmap)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			configmapSpec := r.buildConfigMap(zkCluster)
+			l.Info("Creating a new ConfigMap")
+			err = r.Create(ctx, configmapSpec)
+			if err != nil {
+				l.Error(err, "Failed to create ConfigMap")
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{Requeue: true}, nil
+		}
+		l.Error(err, "Failed to get ConfigMap")
+		return ctrl.Result{}, err
+	}
+
 	// Check statefulset whether exists, create if not found
 	sts := new(appsv1.StatefulSet)
-	namespacedName := types.NamespacedName{Name: zkCluster.Name, Namespace: zkCluster.Namespace}
 	err = r.Get(ctx, namespacedName, sts)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -91,24 +125,6 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 		return ctrl.Result{}, err
 	}
 
-	// Check service whether exists, create if not found
-	svc := new(corev1.Service)
-	err = r.Get(ctx, namespacedName, svc)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			svcSpec := r.buildService(zkCluster)
-			l.Info("Createing a new Service")
-			err = r.Create(ctx, svcSpec)
-			if err != nil {
-				l.Error(err, "Failed to create Service")
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{Requeue: true}, nil
-		}
-		l.Error(err, "Failed to get Service")
-		return ctrl.Result{}, err
-	}
-
 	// Ensure the statefulset replicas is the same as the spec
 	desiredReplicas := int32(zkCluster.Spec.Replicas)
 	if *sts.Spec.Replicas != desiredReplicas {
@@ -122,6 +138,7 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	// Update status and reconfig zookeeper cluster
 	podList := &corev1.PodList{}
 	listOpts := []client.ListOption{
 		client.InNamespace(zkCluster.Namespace),
@@ -154,118 +171,6 @@ func (r *ZooKeeperClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kvv1.ZooKeeperCluster{}).
 		Complete(r)
-}
-
-func (r *ZooKeeperClusterReconciler) buildStatefulSet(spec *kvv1.ZooKeeperCluster) *appsv1.StatefulSet {
-	replicas := int32(spec.Spec.Replicas)
-	labels := labelsForZooKeeperCluster(spec.Name)
-	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      spec.Name,
-			Namespace: spec.Namespace,
-		},
-		Spec: appsv1.StatefulSetSpec{
-			ServiceName: spec.Name,
-			Replicas:    &replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "zk",
-							Image: "zookeeper:3.5.8",
-							Ports: []corev1.ContainerPort{
-								{Name: "port1", ContainerPort: 2181},
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "config-volume", SubPath: "zoo.cfg", MountPath: "/conf/zoo.cfg"},
-								{Name: "data-volume", SubPath: "myid", MountPath: "/data/myid"},
-							},
-						},
-					},
-					InitContainers: []corev1.Container{
-						{
-							Name:    "cfg-maker",
-							Image:   "busybox",
-							Command: []string{"sh"},
-							Args:    []string{"/mkconfig.sh"},
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "zk-cfg", SubPath: "zoo.cfg", MountPath: "/tmp/zoo.cfg.tpl"},
-								{Name: "zk-cfg", SubPath: "mkconfig.sh", MountPath: "/mkconfig.sh"},
-								{Name: "config-volume", MountPath: "/conf"},
-								{Name: "data-volume", MountPath: "/data"},
-							},
-							Env: []corev1.EnvVar{
-								{
-									Name: "POD_NAME",
-									ValueFrom: &corev1.EnvVarSource{
-										FieldRef: &corev1.ObjectFieldSelector{
-											FieldPath: "metadata.name",
-										},
-									},
-								},
-								{
-									Name: "NAMESPACE",
-									ValueFrom: &corev1.EnvVarSource{
-										FieldRef: &corev1.ObjectFieldSelector{
-											FieldPath: "metadata.namespace",
-										},
-									},
-								},
-							},
-						},
-					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "zk-cfg",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{Name: ZooConfigMap},
-								},
-							},
-						},
-						{
-							Name: "config-volume",
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-						{
-							Name: "data-volume",
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	ctrl.SetControllerReference(spec, sts, r.Scheme)
-	return sts
-}
-
-func (r *ZooKeeperClusterReconciler) buildService(spec *kvv1.ZooKeeperCluster) *corev1.Service {
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      spec.Name,
-			Namespace: spec.Namespace,
-		},
-		Spec: corev1.ServiceSpec{
-			Ports: []corev1.ServicePort{
-				{Name: "port-1", Port: 2181},
-			},
-			Selector: labelsForZooKeeperCluster(spec.Name),
-		},
-	}
-	ctrl.SetControllerReference(spec, svc, r.Scheme)
-	return svc
 }
 
 func (r *ZooKeeperClusterReconciler) reconfigZk(namespace, svcName string, pods []corev1.Pod) error {
