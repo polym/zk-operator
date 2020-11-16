@@ -48,10 +48,10 @@ echo $myid > /data/myid
 cp /tmp/zoo.cfg.tpl /conf/zoo.cfg
 for id in $(seq 1 3)
 do
-  echo -e "server."$id"=$svcname-"$(($id-1))".$svcname.$namespace:2888:3888;2181" >> /conf/zoo.cfg
+  echo -e "server."$id"=$svcname-"$(($id-1))".$svcname.$namespace.svc.cluster.local:2888:3888;2181" >> /conf/zoo.cfg
 done
 if [ $myid -gt 3 ];then
-  echo -e "server."$myid"="$podname".$svcname.$namespace:2888:3888;2181" >> /conf/zoo.cfg
+  echo -e "server."$myid"="$podname".$svcname.$namespace.svc.cluster.local:2888:3888;2181" >> /conf/zoo.cfg
 fi
 `,
 }
@@ -76,7 +76,6 @@ func (r *ZooKeeperClusterReconciler) buildService(spec *kvv1.ZooKeeperCluster) *
 			Namespace: spec.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
-			ClusterIP: "None",
 			Ports: []corev1.ServicePort{
 				{Name: "port-1", Port: 2181},
 			},

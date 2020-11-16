@@ -181,10 +181,10 @@ func (r *ZooKeeperClusterReconciler) reconfigZk(namespace, svcName string, pods 
 		if err != nil {
 			return fmt.Errorf("get pod id %s: %v", pod.Name, err)
 		}
-		addrs = append(addrs, fmt.Sprintf("server.%d=%s.%s.%s:2888:3888", podId+1, pod.Name, svcName, pod.Namespace))
+		addrs = append(addrs, fmt.Sprintf("server.%d=%s.%s.%s.svc.cluster.local:2888:3888", podId+1, pod.Name, svcName, pod.Namespace))
 	}
 
-	zkAddr := fmt.Sprintf("%s.%s:2181", svcName, namespace)
+	zkAddr := fmt.Sprintf("%s.%s.svc.cluster.local:2181", svcName, namespace)
 	conn, _, err := zk.Connect([]string{zkAddr}, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("connect to zk %s: %v", zkAddr, err)
