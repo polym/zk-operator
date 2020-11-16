@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -210,5 +211,6 @@ func getPodNames(pods []corev1.Pod) []string {
 	for idx, pod := range pods {
 		podNames[idx] = fmt.Sprintf("%s/%s", pod.Name, pod.Status.PodIP)
 	}
+	sort.Sort(podNames)
 	return podNames
 }

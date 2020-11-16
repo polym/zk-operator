@@ -28,6 +28,8 @@ type ZooKeeperClusterSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
+	// +kubebuilder:validation:Minimum=3
+	// +kubebuilder:validation:Maximum=255
 	Replicas int `json:"replicas,omitempty"`
 }
 

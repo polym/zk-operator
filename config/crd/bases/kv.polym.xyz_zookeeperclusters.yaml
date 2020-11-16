@@ -37,6 +37,8 @@ spec:
           description: ZooKeeperClusterSpec defines the desired state of ZooKeeperCluster
           properties:
             replicas:
+              maximum: 255
+              minimum: 3
               type: integer
           type: object
         status:
