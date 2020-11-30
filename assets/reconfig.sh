@@ -1,0 +1,2 @@
+#./zk-reconfig -addrList 10.244.0.22:2181 -addrListAdd=zookeepercluster-sample-0.zookeepercluster-sample.default.svc.cluster.local:2888:3888,zookeepercluster-sample-1.zookeepercluster-sample.default.svc.cluster.local:2888:3888,zookeepercluster-sample-2.zookeepercluster-sample.default.svc.cluster.local:2888:3888 -addrListRemove=4,5,6,7,9
+./zk-reconfig -addrList 10.244.0.22:2181 -addrListAdd="" -addrListRemove=4,5,6,7,9

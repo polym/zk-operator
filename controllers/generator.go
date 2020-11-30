@@ -1,6 +1,4 @@
 /*
-Copyright 2020.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -38,6 +36,7 @@ standaloneEnabled=false
 reconfigEnabled=true
 skipACL=yes
 admin.enableServer=true
+4lw.commands.whitelist=*
 `,
 	"mkconfig.sh": `#!/bin/sh
 podname=${POD_NAME}
@@ -107,8 +106,9 @@ func (r *ZooKeeperClusterReconciler) buildStatefulSet(spec *kvv1.ZooKeeperCluste
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
-							Name:  "zk",
-							Image: "zookeeper:3.5.8",
+							Name:            "zk",
+							Image:           "zookeeper:3.5.8",
+							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports: []corev1.ContainerPort{
 								{Name: "port1", ContainerPort: 2181},
 							},
@@ -120,10 +120,11 @@ func (r *ZooKeeperClusterReconciler) buildStatefulSet(spec *kvv1.ZooKeeperCluste
 					},
 					InitContainers: []corev1.Container{
 						{
-							Name:    "cfg-maker",
-							Image:   "busybox",
-							Command: []string{"sh"},
-							Args:    []string{"/mkconfig.sh"},
+							Name:            "cfg-maker",
+							Image:           "busybox",
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"sh"},
+							Args:            []string{"/mkconfig.sh"},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "zk-cfg", SubPath: "zoo.cfg", MountPath: "/tmp/zoo.cfg.tpl"},
 								{Name: "zk-cfg", SubPath: "mkconfig.sh", MountPath: "/mkconfig.sh"},

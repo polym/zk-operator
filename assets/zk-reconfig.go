@@ -12,12 +12,14 @@ import (
 
 func main() {
 	var (
-		addrList    string
-		addrListNew string
+		addrList       string
+		addrListAdd    string
+		addrListRemove string
 	)
 
 	flag.StringVar(&addrList, "addrList", "127.0.0.1:2181", "zookeeper address list format as HOST:PORT,HOST:PORT")
-	flag.StringVar(&addrListNew, "addrListNew", "127.0.0.1:2181", "zookeeper new address list format as HOST:PORT,HOST:PORT")
+	flag.StringVar(&addrListAdd, "addrListAdd", "127.0.0.1:2888:3888", "zookeeper new address list format as HOST:PORT,HOST:PORT")
+	flag.StringVar(&addrListRemove, "addrListRemove", "1", "zookeeper remove myid list")
 	flag.Parse()
 
 	conn, eventChan, err := zk.Connect(strings.Split(addrList, ","), 100*time.Second)
@@ -41,18 +43,12 @@ func main() {
 
 	log.Printf("clusterState: %+v", conn.State().String())
 
-	newAddrs := strings.Split(addrListNew, ",")
-	reconfigAddrs := []string{}
-	/*
-		for idx, addr := range newAddrs {
-			reconfigAddrs = append(reconfigAddrs, fmt.Sprintf("server.%d=%s:2888:3888", idx+1, addr))
-		}
-	*/
-	reconfigAddrs = newAddrs
+	addAddrs := strings.Split(addrListAdd, ",")
+	removeAddrs := strings.Split(addrListRemove, ",")
 
-	log.Printf("reconfigAddrs: %v", reconfigAddrs)
+	log.Printf("add %+v, remove %+v", addAddrs, removeAddrs)
 
-	state, err := conn.Reconfig(reconfigAddrs, -1)
+	state, err := conn.IncrementalReconfig(addAddrs, removeAddrs, -1)
 	log.Printf("state: %+v, err: %+v", state, err)
 
 	log.Printf("clusterState: %+v", conn.State().String())

@@ -60,7 +60,34 @@ func runZkGet(ip string) {
 	}()
 }
 
+func printZkMasterOrSlave(ip string) {
+	addr := fmt.Sprintf("%s:2181", ip)
+	conn, _, err := zk.Connect([]string{addr}, 60*time.Minute)
+	if err != nil {
+		log.Printf("[E] connect to %s failed", addr)
+		return
+	}
+	defer conn.Close()
+}
+
 func watchEndpoints(kubeCli kubernetes.Interface, namespace, name string, d time.Duration) {
+	ticker := time.NewTicker(d)
+	ctx := context.Background()
+	for _ = range ticker.C {
+		eds, err := kubeCli.CoreV1().Endpoints(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			log.Printf("[E] get endpoint %s/%s: %v", namespace, name, err)
+			continue
+		}
+		for _, ed := range eds.Subsets {
+			for _, addr := range ed.Addresses {
+				runZkGet(addr.IP)
+			}
+		}
+	}
+}
+
+func printZkClusterInfo(kubeCli kubernetes.Interface, namespace, name string, d time.Duration) {
 	ticker := time.NewTicker(d)
 	ctx := context.Background()
 	for _ = range ticker.C {
