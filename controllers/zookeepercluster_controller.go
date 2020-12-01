@@ -69,12 +69,18 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 		return ctrl.Result{}, err
 	}
 
-	// name for statefulset, configmap, service
-	namespacedName := types.NamespacedName{Name: zkCluster.Name, Namespace: zkCluster.Namespace}
+	var (
+		nsName  = zkCluster.Namespace
+		zkcName = zkCluster.Name
+
+		svcKey = types.NamespacedName{Name: zkcName, Namespace: nsName}
+		cmKey  = types.NamespacedName{Name: zkcName, Namespace: nsName}
+		stsKey = types.NamespacedName{Name: zkcName, Namespace: nsName}
+	)
 
 	// Check service whether exists, create if not found
 	svc := new(corev1.Service)
-	err = r.Get(ctx, namespacedName, svc)
+	err = r.Get(ctx, svcKey, svc)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			svcSpec := r.buildService(zkCluster)
@@ -94,7 +100,7 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 
 	// Check configmap whether exists, create if not found
 	configmap := new(corev1.ConfigMap)
-	err = r.Get(ctx, namespacedName, configmap)
+	err = r.Get(ctx, cmKey, configmap)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			configmapSpec := r.buildConfigMap(zkCluster)
@@ -114,7 +120,7 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 
 	// Check statefulset whether exists, create if not found
 	sts := new(appsv1.StatefulSet)
-	err = r.Get(ctx, namespacedName, sts)
+	err = r.Get(ctx, stsKey, sts)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			stsSpec := r.buildStatefulSet(zkCluster)
@@ -135,16 +141,19 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	}
 
 	// Ensure the statefulset replicas is the same as the spec
-	desiredReplicas := int32(zkCluster.Spec.Replicas)
-	if *sts.Spec.Replicas != desiredReplicas {
-		if *sts.Spec.Replicas > desiredReplicas {
-			err = r.reconfigZkScaleDown(zkCluster.Namespace, zkCluster.Name, int(*sts.Spec.Replicas), int(desiredReplicas))
+	currentReplicas := int(*sts.Spec.Replicas)
+	desiredReplicas := zkCluster.Spec.Replicas
+	if currentReplicas != desiredReplicas {
+		if currentReplicas > desiredReplicas {
+			l.Info("reconfigZkScaleDown: %d => %d", currentReplicas, desiredReplicas)
+			err = r.reconfigZkScaleDown(nsName, zkcName, currentReplicas, desiredReplicas)
 			if err != nil {
-				l.Error(err, fmt.Sprintf("Failed to reconfigZkScaleDown %d => %d", int(*sts.Spec.Replicas), int(desiredReplicas)))
+				l.Error(err, fmt.Sprintf("Failed to reconfigZkScaleDown %d => %d", currentReplicas, desiredReplicas))
 				return ctrl.Result{}, err
 			}
 		}
-		sts.Spec.Replicas = &desiredReplicas
+		v := int32(desiredReplicas)
+		sts.Spec.Replicas = &v
 		err = r.Update(ctx, sts)
 		if err != nil {
 			l.Error(err, "Failed to update StatefulSet")
@@ -156,27 +165,27 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	qPodNames, err := r.getZkQuorumConfig(zkCluster.Namespace, zkCluster.Name)
+	// Sometimes pods in quorum are not desired, scale down it
+	qPodNames, err := r.getZkQuorumConfig(nsName, zkcName)
 	if err != nil {
 		l.Error(err, "Failed to update getZkQuorumConfig")
 		return ctrl.Result{}, err
 	}
-
-	reconfig := false
+	scaleDown := false
 	if len(qPodNames) > int(desiredReplicas) {
-		err = r.reconfigZkScaleDown(zkCluster.Namespace, zkCluster.Name, len(qPodNames), int(desiredReplicas))
+		err = r.reconfigZkScaleDown(nsName, zkcName, len(qPodNames), desiredReplicas)
 		if err != nil {
-			l.Error(err, fmt.Sprintf("Failed to reconfigZkScaleDown %d => %d", len(qPodNames), int(desiredReplicas)))
+			l.Error(err, fmt.Sprintf("Failed to reconfigZkScaleDown %d => %d", len(qPodNames), desiredReplicas))
 			return ctrl.Result{}, err
 		}
-		reconfig = true
+		scaleDown = true
 	}
 
 	// Update status and reconfig zookeeper cluster
 	podList := &corev1.PodList{}
 	listOpts := []client.ListOption{
-		client.InNamespace(zkCluster.Namespace),
-		client.MatchingLabels(labelsForZooKeeperCluster(zkCluster.Name)),
+		client.InNamespace(nsName),
+		client.MatchingLabels(labelsForZooKeeperCluster(zkcName)),
 	}
 	if err = r.List(ctx, podList, listOpts...); err != nil {
 		l.Error(err, "Failed to list pods: %v", listOpts)
@@ -185,9 +194,10 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	podNames, stable := getPodNames(podList.Items)
 
 	if !reflect.DeepEqual(podNames, zkCluster.Status.Nodes) {
-		if !reconfig {
-			l.Info("reconfigZkWithPods")
-			err = r.reconfigZkWithPods(zkCluster.Namespace, zkCluster.Name, podList.Items)
+		// Only reconfig if not scaleDown case
+		if !scaleDown {
+			l.Info("reconfigZkWithPods: %v", podList.Items)
+			err = r.reconfigZkWithPods(nsName, zkcName, podList.Items)
 			if err != nil {
 				l.Error(err, "Failed to reconfig zk with pods")
 				return ctrl.Result{}, err
@@ -200,7 +210,6 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 			return ctrl.Result{}, err
 		}
 		l.Info("Update Status ok")
-		// l.V(3).Info("Update Status ok")
 		// requeue to update status
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -231,11 +240,9 @@ func (r *ZooKeeperClusterReconciler) reconfigZkWithPods(namespace, svcName strin
 		addrs = append(addrs, fmt.Sprintf("server.%d=%s.%s.%s.svc.cluster.local:2888:3888", podId+1, pod.Name, svcName, pod.Namespace))
 	}
 
-	// TODO(@hongbo.mo): not right
-	zkAddr := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local:2181", svcName, svcName, namespace)
-	conn, _, err := zk.Connect([]string{zkAddr}, 10*time.Second)
+	conn, err := getZkConn(namspace, svcName)
 	if err != nil {
-		return fmt.Errorf("connect to zk %s: %v", zkAddr, err)
+		return fmt.Errorf("getZkConn: %v", err)
 	}
 	defer conn.Close()
 
@@ -248,33 +255,29 @@ func (r *ZooKeeperClusterReconciler) reconfigZkWithPods(namespace, svcName strin
 }
 
 func (r *ZooKeeperClusterReconciler) reconfigZkScaleDown(namespace, svcName string, oldReplicas, newReplicas int) error {
-	addrs := []string{}
+	myids := []string{}
 	for i := newReplicas; i < oldReplicas; i++ {
-		addrs = append(addrs, fmt.Sprint(i+1))
+		myids = append(myids, fmt.Sprint(i+1))
 	}
 
-	// TODO(@hongbo.mo): not right
-	zkAddr := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local:2181", svcName, svcName, namespace)
-	conn, _, err := zk.Connect([]string{zkAddr}, 10*time.Second)
+	conn, err := getZkConn(namspace, svcName)
 	if err != nil {
-		return fmt.Errorf("connect to zk %s: %v", zkAddr, err)
+		return fmt.Errorf("getZkConn: %v", err)
 	}
 	defer conn.Close()
 
-	_, err = conn.IncrementalReconfig(nil, addrs, -1)
+	_, err = conn.IncrementalReconfig(nil, myids, -1)
 	if err != nil {
-		return fmt.Errorf("incremental reconfig: %v %v", addrs, err)
+		return fmt.Errorf("incremental reconfig: %v %v", myids, err)
 	}
 
 	return nil
 }
 
 func (r *ZooKeeperClusterReconciler) getZkQuorumConfig(namespace, svcName string) ([]string, error) {
-	// TODO(@hongbo.mo): not right
-	zkAddr := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local:2181", svcName, svcName, namespace)
-	conn, _, err := zk.Connect([]string{zkAddr}, 10*time.Second)
+	conn, err := getZkConn(namspace, svcName)
 	if err != nil {
-		return nil, fmt.Errorf("connect to zk %s: %v", zkAddr, err)
+		return nil, fmt.Errorf("getZkConn: %v", err)
 	}
 	defer conn.Close()
 
@@ -319,4 +322,17 @@ func getZkQuorumPodNames(data string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func getZkConn(namespace, svcName string) (*zk.Conn, error) {
+	zkAddrs := []string{}
+	// smallest 3 quorum
+	for i := 0; i < 3; i++ {
+		zkAddrs = append(zkAddrs, fmt.Sprintf("%s-%d.%s.%s.svc.cluster.local:2181", svcName, i, svcName, namespace))
+	}
+	conn, _, err := zk.Connect(zkAddrs, 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("connect to zk %s: %v", zkAddrs, err)
+	}
+	return conn, nil
 }
