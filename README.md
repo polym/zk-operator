@@ -28,9 +28,19 @@ spec:
   replicas: 5
 ```
 
+## Test
+
+```
+$ kubectl apply -f config/samples/kv_v1_zookeepercluster.yaml
+$ bash test.sh
+$ watch kubectl get pod
+$ while true; do ./bin/zkCli.sh config; done
+```
+
 ## Addition: Kubernetes dev environment init
 
 ```
 $ kubeadm init --pod-network-cidr=10.244.0.0/16
 $ kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
 ```
+

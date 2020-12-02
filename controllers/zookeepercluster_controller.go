@@ -145,7 +145,7 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 	desiredReplicas := zkCluster.Spec.Replicas
 	if currentReplicas != desiredReplicas {
 		if currentReplicas > desiredReplicas {
-			l.Info("reconfigZkScaleDown: %d => %d", currentReplicas, desiredReplicas)
+			l.Info(fmt.Sprintf("reconfigZkScaleDown: %d => %d", currentReplicas, desiredReplicas))
 			err = r.reconfigZkScaleDown(nsName, zkcName, currentReplicas, desiredReplicas)
 			if err != nil {
 				l.Error(err, fmt.Sprintf("Failed to reconfigZkScaleDown %d => %d", currentReplicas, desiredReplicas))
@@ -172,7 +172,7 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 		return ctrl.Result{}, err
 	}
 	scaleDown := false
-	if len(qPodNames) > int(desiredReplicas) {
+	if len(qPodNames) > desiredReplicas {
 		err = r.reconfigZkScaleDown(nsName, zkcName, len(qPodNames), desiredReplicas)
 		if err != nil {
 			l.Error(err, fmt.Sprintf("Failed to reconfigZkScaleDown %d => %d", len(qPodNames), desiredReplicas))
@@ -188,22 +188,23 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 		client.MatchingLabels(labelsForZooKeeperCluster(zkcName)),
 	}
 	if err = r.List(ctx, podList, listOpts...); err != nil {
-		l.Error(err, "Failed to list pods: %v", listOpts)
+		l.Error(err, fmt.Sprintf("Failed to list pods: %v", listOpts))
 		return ctrl.Result{}, err
 	}
-	podNames, stable := getPodNames(podList.Items)
+	nodeNames, stable := getZkNodeNames(podList.Items)
 
-	if !reflect.DeepEqual(podNames, zkCluster.Status.Nodes) {
-		// Only reconfig if not scaleDown case
-		if !scaleDown {
-			l.Info("reconfigZkWithPods: %v", podList.Items)
-			err = r.reconfigZkWithPods(nsName, zkcName, podList.Items)
+	if !reflect.DeepEqual(nodeNames, zkCluster.Status.Nodes) {
+		// reconfig in scale-up case
+		podNames := getReadyPodNames(podList.Items)
+		if !scaleDown && len(podNames) <= desiredReplicas {
+			l.Info(fmt.Sprintf("reconfigZkWithPods: %v %v", podNames, qPodNames))
+			err = r.reconfigZkWithPods(nsName, zkcName, podNames, qPodNames)
 			if err != nil {
 				l.Error(err, "Failed to reconfig zk with pods")
 				return ctrl.Result{}, err
 			}
 		}
-		zkCluster.Status.Nodes = podNames
+		zkCluster.Status.Nodes = nodeNames
 		err = r.Status().Update(ctx, zkCluster)
 		if err != nil {
 			l.Error(err, "Failed to update status")
@@ -214,7 +215,7 @@ func (r *ZooKeeperClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, e
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if !stable || len(podNames) != zkCluster.Spec.Replicas {
+	if !stable || len(nodeNames) != zkCluster.Spec.Replicas {
 		l.Info("Not stable status")
 		// l.V(3).Info("Not stable status")
 		// requeue until stable
@@ -230,25 +231,37 @@ func (r *ZooKeeperClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *ZooKeeperClusterReconciler) reconfigZkWithPods(namespace, svcName string, pods []corev1.Pod) error {
-	addrs := []string{}
-	for _, pod := range pods {
-		podId, err := strconv.ParseInt(pod.Name[strings.LastIndex(pod.Name, "-")+1:], 0, 0)
+func (r *ZooKeeperClusterReconciler) reconfigZkWithPods(namespace, svcName string, newPods, oldPods []string) error {
+	addPods := notInSlice(newPods, oldPods)
+	removePods := notInSlice(oldPods, newPods)
+
+	addServers := []string{}
+	for _, pod := range addPods {
+		podId, err := getPodId(pod)
 		if err != nil {
-			return fmt.Errorf("get pod id %s: %v", pod.Name, err)
+			return err
 		}
-		addrs = append(addrs, fmt.Sprintf("server.%d=%s.%s.%s.svc.cluster.local:2888:3888", podId+1, pod.Name, svcName, pod.Namespace))
+		addServers = append(addServers, fmt.Sprintf("server.%d=%s.%s.%s.svc.cluster.local:2888:3888;2181", podId+1, pod, svcName, namespace))
 	}
 
-	conn, err := getZkConn(namspace, svcName)
+	removeMyIds := []string{}
+	for _, pod := range removePods {
+		podId, err := getPodId(pod)
+		if err != nil {
+			return err
+		}
+		removeMyIds = append(removeMyIds, fmt.Sprint(podId+1))
+	}
+
+	conn, err := getZkConn(namespace, svcName)
 	if err != nil {
 		return fmt.Errorf("getZkConn: %v", err)
 	}
 	defer conn.Close()
 
-	_, err = conn.Reconfig(addrs, -1)
+	_, err = conn.IncrementalReconfig(addServers, removeMyIds, -1)
 	if err != nil {
-		return fmt.Errorf("reconfig failed: %v %v", addrs, err)
+		return fmt.Errorf("incremental reconfig failed: %v %v %v", addServers, removeMyIds, err)
 	}
 
 	return nil
@@ -260,7 +273,7 @@ func (r *ZooKeeperClusterReconciler) reconfigZkScaleDown(namespace, svcName stri
 		myids = append(myids, fmt.Sprint(i+1))
 	}
 
-	conn, err := getZkConn(namspace, svcName)
+	conn, err := getZkConn(namespace, svcName)
 	if err != nil {
 		return fmt.Errorf("getZkConn: %v", err)
 	}
@@ -275,7 +288,7 @@ func (r *ZooKeeperClusterReconciler) reconfigZkScaleDown(namespace, svcName stri
 }
 
 func (r *ZooKeeperClusterReconciler) getZkQuorumConfig(namespace, svcName string) ([]string, error) {
-	conn, err := getZkConn(namspace, svcName)
+	conn, err := getZkConn(namespace, svcName)
 	if err != nil {
 		return nil, fmt.Errorf("getZkConn: %v", err)
 	}
@@ -295,7 +308,7 @@ func labelsForZooKeeperCluster(name string) map[string]string {
 	}
 }
 
-func getPodNames(pods []corev1.Pod) ([]string, bool) {
+func getZkNodeNames(pods []corev1.Pod) ([]string, bool) {
 	podNames := make([]string, len(pods))
 	stable := true
 	for idx, pod := range pods {
@@ -306,6 +319,17 @@ func getPodNames(pods []corev1.Pod) ([]string, bool) {
 	}
 	sort.Strings(podNames)
 	return podNames, stable
+}
+
+func getReadyPodNames(pods []corev1.Pod) []string {
+	podNames := make([]string, len(pods))
+	for idx, pod := range pods {
+		if pod.Status.Phase == corev1.PodRunning {
+			podNames[idx] = pod.Name
+		}
+	}
+	sort.Strings(podNames)
+	return podNames
 }
 
 /*
@@ -335,4 +359,29 @@ func getZkConn(namespace, svcName string) (*zk.Conn, error) {
 		return nil, fmt.Errorf("connect to zk %s: %v", zkAddrs, err)
 	}
 	return conn, nil
+}
+
+func notInSlice(as, bs []string) []string {
+	ax := make([]string, 0)
+	for _, a := range as {
+		found := false
+		for _, b := range bs {
+			if a == b {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ax = append(ax, a)
+		}
+	}
+	return ax
+}
+
+func getPodId(name string) (int, error) {
+	podId, err := strconv.ParseInt(name[strings.LastIndex(name, "-")+1:], 0, 0)
+	if err != nil {
+		return -1, fmt.Errorf("get pod id %s: %v", name, err)
+	}
+	return int(podId), nil
 }
