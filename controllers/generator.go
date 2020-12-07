@@ -75,6 +75,7 @@ func (r *ZooKeeperClusterReconciler) buildService(spec *kvv1.ZooKeeperCluster) *
 			Namespace: spec.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
+			ClusterIP: "None",
 			Ports: []corev1.ServicePort{
 				{Name: "port-1", Port: 2181},
 			},
